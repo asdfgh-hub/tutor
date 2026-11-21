@@ -1,0 +1,36 @@
+workflows:
+  english-ai-tutor-unsigned-ipa:
+    name: English AI Tutor — unsigned IPA for Sideloadly
+    working_directory: EnglishAITutor
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      xcode: latest
+    scripts:
+      - name: Build iOS app without code signing
+        script: |
+          set -euo pipefail
+          mkdir -p "$CM_BUILD_DIR/xcode-logs"
+          xcodebuild \
+            -project EnglishAITutor.xcodeproj \
+            -scheme EnglishAITutor \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$CM_BUILD_DIR/derived-data" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build 2>&1 | tee "$CM_BUILD_DIR/xcode-logs/build.log"
+      - name: Package unsigned IPA for Sideloadly
+        script: |
+          set -euo pipefail
+          APP_PATH="$CM_BUILD_DIR/derived-data/Build/Products/Release-iphoneos/EnglishAITutor.app"
+          test -d "$APP_PATH"
+          rm -rf "$CM_BUILD_DIR/ipa-payload"
+          mkdir -p "$CM_BUILD_DIR/ipa-payload/Payload"
+          cp -R "$APP_PATH" "$CM_BUILD_DIR/ipa-payload/Payload/EnglishAITutor.app"
+          cd "$CM_BUILD_DIR/ipa-payload"
+          /usr/bin/zip -qr "$CM_BUILD_DIR/EnglishAITutor_unsigned.ipa" Payload
+    artifacts:
+      - EnglishAITutor_unsigned.ipa
+      - xcode-logs/*.log
