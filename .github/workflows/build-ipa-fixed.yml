@@ -1,0 +1,48 @@
+name: Build unsigned iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version and project schemes
+        run: |
+          xcodebuild -version
+          xcodebuild -list -project EnglishAITutor/EnglishAITutor.xcodeproj
+
+      - name: Archive app without signing
+        run: |
+          xcodebuild archive \
+            -project EnglishAITutor/EnglishAITutor.xcodeproj \
+            -scheme EnglishAITutor \
+            -configuration Release \
+            -destination "generic/platform=iOS" \
+            -archivePath "$RUNNER_TEMP/EnglishAITutor.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package unsigned IPA
+        run: |
+          APP_PATH="$RUNNER_TEMP/EnglishAITutor.xcarchive/Products/Applications/EnglishAITutor.app"
+          test -d "$APP_PATH"
+          mkdir -p "$RUNNER_TEMP/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/Payload/"
+          cd "$RUNNER_TEMP"
+          /usr/bin/zip -qry EnglishAITutor_unsigned.ipa Payload
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EnglishAITutor-unsigned-IPA
+          path: ${{ runner.temp }}/EnglishAITutor_unsigned.ipa
+          if-no-files-found: error
+          retention-days: 14
