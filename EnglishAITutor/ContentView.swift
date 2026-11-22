@@ -133,8 +133,8 @@ struct ContentView: View {
                     }
                 case .review(let sessionID):
                     ReviewResultHostView(
-                        sessionID: sessionID,
                         store: lessonStore,
+                        sessionID: sessionID,
                         isGenerating: $isGeneratingReview,
                         errorMessage: $reviewErrorMessage,
                         onRetry: { Task { await generateReview(for: sessionID) } },
