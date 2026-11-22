@@ -1,5 +1,23 @@
 import SwiftUI
 
+private enum ContentSheet: Identifiable {
+    case settings, newLesson, vocabulary, progress, history
+    case review(UUID)
+    case correction(UUID)
+
+    var id: String {
+        switch self {
+        case .settings: return "settings"
+        case .newLesson: return "newLesson"
+        case .vocabulary: return "vocabulary"
+        case .progress: return "progress"
+        case .history: return "history"
+        case .review(let id): return "review-\(id.uuidString)"
+        case .correction(let id): return "correction-\(id.uuidString)"
+        }
+    }
+}
+
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @StateObject private var speech = SpeechManager()
@@ -11,17 +29,11 @@ struct ContentView: View {
     @AppStorage("tutor.apiBase") private var apiBase = "https://router.cheap/v1"
 
     @State private var apiKey = KeychainStore.read() ?? ""
-    @State private var showSettings = false
-    @State private var showHistory = false
-    @State private var showVocabulary = false
-    @State private var showProgress = false
-    @State private var showNewLesson = false
-    @State private var showReview = false
-    @State private var showCorrectionPractice = false
+    @State private var activeSheet: ContentSheet?
+    @State private var reviewErrorMessage: String?
     @State private var showTranscript = true
     @State private var isSendingTranscript = false
     @State private var isGeneratingReview = false
-    @State private var reviewedSession: LessonSession?
     @State private var selectedCorrection: CorrectionItem?
 
     private var timerText: String {
@@ -49,11 +61,14 @@ struct ContentView: View {
                             ForEach(lessonStore.currentMessages) { message in
                                 MessageBubble(message: message) { correction in
                                     selectedCorrection = correction
-                                    showCorrectionPractice = true
+                                    activeSheet = .correction(correction.id)
                                 }
                                 .id(message.id)
                             }
-                            if tutor.isSending || isSendingTranscript {
+                            if isGeneratingReview {
+                                ProgressView("Подготавливаю итоговый разбор урока…")
+                                    .padding()
+                            } else if tutor.isSending || isSendingTranscript {
                                 HStack(spacing: 8) {
                                     ProgressView()
                                     Text(currentMode == .interview ? "The recruiter is thinking…" : "The passenger is thinking…")
@@ -61,10 +76,6 @@ struct ContentView: View {
                                     Spacer()
                                 }
                                 .padding(.horizontal)
-                            }
-                            if isGeneratingReview {
-                                ProgressView("Подготавливаю итоговый разбор урока…")
-                                    .padding()
                             }
                         }
                         .padding()
@@ -85,58 +96,64 @@ struct ContentView: View {
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) {
                     Menu {
-                        Button { showNewLesson = true } label: { Label("Новое занятие", systemImage: "plus.circle") }
-                        Button { showVocabulary = true } label: { Label("Мой словарь", systemImage: "book.closed") }
-                        Button { showProgress = true } label: { Label("Мой прогресс", systemImage: "chart.bar") }
-                        Button { showHistory = true } label: { Label("История уроков", systemImage: "clock.arrow.circlepath") }
+                        Button { activeSheet = .newLesson } label: { Label("Новое занятие", systemImage: "plus.circle") }
+                        Button { activeSheet = .vocabulary } label: { Label("Мой словарь", systemImage: "book.closed") }
+                        Button { activeSheet = .progress } label: { Label("Мой прогресс", systemImage: "chart.bar") }
+                        Button { activeSheet = .history } label: { Label("История уроков", systemImage: "clock.arrow.circlepath") }
                     } label: { Image(systemName: "line.3.horizontal") }
                 }
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { showSettings = true } label: { Image(systemName: "gearshape") }
+                    Button { activeSheet = .settings } label: { Image(systemName: "gearshape") }
                         .accessibilityLabel("Settings")
                 }
             }
-            .sheet(isPresented: $showSettings) {
-                SettingsView(apiKey: $apiKey, model: $model, reviewModel: $reviewModel,
-                             apiBase: $apiBase, tutor: tutor, usageStore: tutor.usageStore)
-            }
-            .sheet(isPresented: $showNewLesson) {
-                NewLessonView(store: lessonStore, tutor: tutor, model: model,
-                              baseURL: apiBase, apiKey: apiKey) { mode, level, scenarioID in
-                    speech.stopSpeaking()
-                    lessonStore.startNewSession(mode: mode, level: level, scenarioID: scenarioID)
-                    showNewLesson = false
-                    if let opening = lessonStore.currentMessages.last?.speechText {
-                        speech.speak(opening)
+            .sheet(item: $activeSheet) { route in
+                switch route {
+                case .settings:
+                    SettingsView(apiKey: $apiKey, model: $model, reviewModel: $reviewModel,
+                                 apiBase: $apiBase, tutor: tutor, usageStore: tutor.usageStore)
+                case .newLesson:
+                    NewLessonView(store: lessonStore, tutor: tutor, model: model,
+                                  baseURL: apiBase, apiKey: apiKey) { mode, level, scenarioID in
+                        speech.stopSpeaking()
+                        lessonStore.startNewSession(mode: mode, level: level, scenarioID: scenarioID)
+                        activeSheet = nil
+                        if let opening = lessonStore.currentMessages.last?.speechText {
+                            speech.speak(opening)
+                        }
                     }
-                }
-            }
-            .sheet(isPresented: $showVocabulary) {
-                VocabularyView(store: lessonStore)
-            }
-            .sheet(isPresented: $showProgress) {
-                LearningProgressView(store: lessonStore)
-            }
-            .sheet(isPresented: $showHistory) {
-                HistoryView(sessions: lessonStore.sessions) { session in
-                    reviewedSession = session
-                    showHistory = false
-                    showReview = true
-                }
-            }
-            .sheet(isPresented: $showReview) {
-                if let session = reviewedSession {
-                    SessionReviewView(session: session) { correction in
-                        selectedCorrection = correction
-                        showReview = false
-                        showCorrectionPractice = true
+                case .vocabulary:
+                    VocabularyView(store: lessonStore)
+                case .progress:
+                    LearningProgressView(store: lessonStore)
+                case .history:
+                    HistoryView(sessions: lessonStore.sessions) { session in
+                        reviewErrorMessage = nil
+                        activeSheet = .review(session.id)
                     }
-                }
-            }
-            .sheet(isPresented: $showCorrectionPractice) {
-                if let correction = selectedCorrection {
-                    CorrectionPracticeView(correction: correction, speech: speech, tutor: tutor,
-                                           model: model, baseURL: apiBase, apiKey: apiKey)
+                case .review(let sessionID):
+                    ReviewResultHostView(
+                        sessionID: sessionID,
+                        store: lessonStore,
+                        isGenerating: $isGeneratingReview,
+                        errorMessage: $reviewErrorMessage,
+                        onRetry: { Task { await generateReview(for: sessionID) } },
+                        onPractice: { correction in
+                            selectedCorrection = correction
+                            activeSheet = .correction(correction.id)
+                        }
+                    )
+                case .correction(let correctionID):
+                    if let correction = selectedCorrection, correction.id == correctionID {
+                        CorrectionPracticeView(correction: correction, speech: speech, tutor: tutor,
+                                               model: model, baseURL: apiBase, apiKey: apiKey)
+                    } else {
+                        VStack(spacing: 8) {
+                            Image(systemName: "text.magnifyingglass").font(.largeTitle).foregroundStyle(.secondary)
+                            Text("Фраза не найдена").foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
                 }
             }
             .alert("English practice", isPresented: Binding(
@@ -362,27 +379,52 @@ struct ContentView: View {
 
     @MainActor
     private func finishLessonAndReview() async {
-        guard lessonStore.activeSessionID != nil else { return }
+        guard !isGeneratingReview, lessonStore.activeSessionID != nil else { return }
         if speech.isRecording { _ = await speech.stopRecordingAndWait() }
         speech.stopSpeaking()
         guard let finishedID = lessonStore.finishCurrentSession() else { return }
+        reviewErrorMessage = nil
+        await generateReview(for: finishedID)
+    }
+
+    @MainActor
+    private func generateReview(for sessionID: UUID) async {
+        guard !isGeneratingReview else { return }
         isGeneratingReview = true
-        if !model.isEmpty, !apiKey.isEmpty,
-           let session = lessonStore.session(id: finishedID),
-           session.messages.contains(where: { $0.role == .user }) {
-            do {
-                let selectedReviewModel = reviewModel.isEmpty ? model : reviewModel
-                let review = try await tutor.generateLessonReview(for: session, model: selectedReviewModel,
-                                                                  baseURL: apiBase, apiKey: apiKey)
-                lessonStore.saveReview(review, for: finishedID)
-                lessonStore.addVocabulary(review.vocabularyItems ?? [])
-            } catch {
-                tutor.errorMessage = "Урок сохранён, но итоговый разбор не получен: \(error.localizedDescription)"
-            }
+        reviewErrorMessage = nil
+        defer { isGeneratingReview = false }
+
+        guard let session = lessonStore.session(id: sessionID) else {
+            reviewErrorMessage = "Занятие сохранено, но его запись не найдена."
+            activeSheet = .review(sessionID)
+            return
         }
-        reviewedSession = lessonStore.session(id: finishedID)
-        isGeneratingReview = false
-        showReview = reviewedSession != nil
+        guard session.messages.contains(where: { $0.role == .user }) else {
+            reviewErrorMessage = "В занятии нет ответов ученика, поэтому анализировать пока нечего."
+            activeSheet = .review(sessionID)
+            return
+        }
+        guard !model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            reviewErrorMessage = "Не выбрана модель для диалога. Открой настройки, выбери модель и повтори разбор."
+            activeSheet = .review(sessionID)
+            return
+        }
+        guard !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            reviewErrorMessage = "Не найден API-ключ. Добавь ключ в настройках и повтори разбор."
+            activeSheet = .review(sessionID)
+            return
+        }
+
+        do {
+            let selectedReviewModel = reviewModel.isEmpty ? model : reviewModel
+            let review = try await tutor.generateLessonReview(for: session, model: selectedReviewModel,
+                                                              baseURL: apiBase, apiKey: apiKey)
+            lessonStore.saveReview(review, for: sessionID)
+            lessonStore.addVocabulary(review.vocabularyItems ?? [])
+        } catch {
+            reviewErrorMessage = error.localizedDescription
+        }
+        activeSheet = .review(sessionID)
     }
 }
 
@@ -870,6 +912,60 @@ struct HistoryView: View {
             }
             .navigationTitle("История занятий")
             .toolbar { ToolbarItem(placement: .navigationBarTrailing) { Button("Готово") { dismiss() } } }
+        }
+    }
+}
+
+struct ReviewResultHostView: View {
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject var store: LessonStore
+    let sessionID: UUID
+    @Binding var isGenerating: Bool
+    @Binding var errorMessage: String?
+    var onRetry: () -> Void
+    var onPractice: (CorrectionItem) -> Void
+
+    var body: some View {
+        Group {
+            if let session = store.session(id: sessionID), session.review != nil {
+                SessionReviewView(session: session, onPractice: onPractice)
+            } else {
+                NavigationStack {
+                    VStack(spacing: 16) {
+                        if isGenerating {
+                            ProgressView()
+                                .controlSize(.large)
+                            Text("Подготавливаю итоговый разбор…")
+                                .font(.headline)
+                        } else {
+                            Image(systemName: "exclamationmark.bubble")
+                                .font(.system(size: 38))
+                                .foregroundStyle(.secondary)
+                            Text("Разбор пока не получен")
+                                .font(.headline)
+                            Text(errorMessage ?? "Занятие сохранено, но ответ с анализом не был получен. Проверь подключение и попробуй ещё раз.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                            Button {
+                                onRetry()
+                            } label: {
+                                Label("Повторить разбор", systemImage: "arrow.clockwise")
+                            }
+                            .buttonStyle(.borderedProminent)
+                        }
+                    }
+                    .padding(24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .navigationTitle("Итоговый разбор")
+                    .toolbar {
+                        ToolbarItem(placement: .navigationBarTrailing) {
+                            Button("Готово") { dismiss() }
+                                .disabled(isGenerating)
+                        }
+                    }
+                }
+            }
         }
     }
 }

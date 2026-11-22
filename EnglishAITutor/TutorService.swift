@@ -138,15 +138,18 @@ final class TutorService: ObservableObject {
         }
         Score from 1 to 10. Do not invent problems when there are none. No pronunciation advice.
         Include up to 5 genuinely useful cabin-crew words or phrases in vocabulary_items. Do not include basic words.
-        Conversation:
+        """
+        let reviewRequest = """
+        Assess this learner conversation. Pay attention to what the LEARNER said, not the AI role's lines.
+        Return only the JSON object in the exact format from the system instructions. Do not add markdown fences.
+        Conversation transcript:
         \(transcript)
         """
-        // Claude requires at least one user turn in `messages`; system-only requests are rejected with HTTP 400.
         let raw = try await sendChat(messages: [
             .init(role: "system", content: prompt),
-            .init(role: "user", content: "Evaluate the learner's conversation shown above. Return only the requested JSON object.")
+            .init(role: "user", content: reviewRequest)
         ], model: model, baseURL: baseURL, apiKey: apiKey,
-           temperature: 0.2, maxTokens: 850, purpose: "Итоговый разбор")
+           temperature: 0.2, maxTokens: 1400, purpose: "Итоговый разбор", cacheResponse: false)
         let dataText = extractJSON(from: raw)
         guard let data = dataText.data(using: .utf8) else { throw TutorError.message("Не удалось прочитать итоговый разбор.") }
         let payload = try JSONDecoder().decode(SessionReviewPayload.self, from: data)
