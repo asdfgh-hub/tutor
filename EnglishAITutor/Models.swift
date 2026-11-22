@@ -212,6 +212,7 @@ struct SessionReview: Codable {
     var modelAnswer: String
     var corrections: [CorrectionItem]
     var drillPhrases: [String]
+    var vocabularyItems: [VocabularySuggestion]?
 }
 
 struct ChatMessage: Identifiable, Codable {
@@ -253,9 +254,17 @@ struct LessonSession: Identifiable, Codable {
     var personality: PassengerPersonality?
     var flightStageIndex: Int?
     var review: SessionReview?
+    // Foreground practice time, accumulated by LessonStore. Optional for older history files.
+    var activeDurationSeconds: TimeInterval?
 
     var duration: TimeInterval {
-        (endedAt ?? Date()).timeIntervalSince(startedAt)
+        if let tracked = activeDurationSeconds {
+            return min(10 * 60, max(0, tracked))
+        }
+        // Legacy migration: never count time spent with the app closed or idle after the last message.
+        guard messages.contains(where: { $0.role == .user }) else { return 0 }
+        let lastActivity = messages.map(\.createdAt).max() ?? startedAt
+        return min(10 * 60, max(0, lastActivity.timeIntervalSince(startedAt)))
     }
 }
 
@@ -439,26 +448,10 @@ struct ParsedTutorReply {
 
         if let data = jsonText.data(using: .utf8), let payload = try? JSONDecoder().decode(AIResponsePayload.self, from: data),
            let reply = payload.reply, !reply.isEmpty {
-            var sections = [reply]
-            if let feedback = payload.feedbackRU, !feedback.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-               feedback.lowercased() != "none" {
-                sections.append("Разбор ошибок\n\(feedback)")
-            }
-            let corrections = payload.corrections ?? []
-            if !corrections.isEmpty {
-                let lines = corrections.map { "\($0.original) → \($0.corrected)\n\($0.explanationRU)" }
-                sections.append("Исправления\n" + lines.joined(separator: "\n\n"))
-            }
-            if let phrase = payload.usefulPhrase, !phrase.isEmpty, phrase.lowercased() != "none" {
-                sections.append("Полезная фраза\n\(phrase)")
-            }
-            let words = payload.vocabulary ?? []
-            if !words.isEmpty {
-                sections.append("Новые слова\n" + words.map { "\($0.term) — \($0.translationRU)" }.joined(separator: "\n"))
-            }
-            return ParsedTutorReply(displayText: sections.joined(separator: "\n\n"), spokenText: reply,
-                                    corrections: corrections, vocabulary: words,
-                                    phrase: payload.usefulPhrase, score: payload.score)
+            // Backward-compatible guard: even if an older model returns feedback JSON,
+            // never display per-turn corrections. Feedback is reserved for end-of-lesson review.
+            return ParsedTutorReply(displayText: reply, spokenText: reply,
+                                    corrections: [], vocabulary: [], phrase: nil, score: nil)
         }
 
         // Safe fallback for providers/models that return plain text instead of the requested JSON.

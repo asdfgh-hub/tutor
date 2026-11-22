@@ -13,6 +13,8 @@ final class LessonStore: ObservableObject {
     private let fileURL: URL
     private let vocabularyURL: URL
     private let scenariosURL: URL
+    private var lastTimerUptime: TimeInterval?
+    private var lastDurationPersistUptime: TimeInterval = 0
 
     init() {
         let directory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -25,10 +27,19 @@ final class LessonStore: ObservableObject {
         loadVocabulary()
         loadScenarios()
 
+        // Migrate old sessions away from wall-clock duration, which used to include
+        // hours when the app was closed. Legacy duration is inferred from actual messages.
+        var didMigrateDurations = false
+        for index in sessions.indices where sessions[index].activeDurationSeconds == nil {
+            sessions[index].activeDurationSeconds = sessions[index].duration
+            didMigrateDurations = true
+        }
+        if didMigrateDurations { persistSessions() }
+
         if let active = sessions.last(where: { $0.endedAt == nil }) {
             activeSessionID = active.id
-            if Date().timeIntervalSince(active.startedAt) >= Self.lessonLength {
-                finishCurrentSession()
+            if active.duration >= Self.lessonLength {
+                _ = finishCurrentSession()
                 startNewSession()
             }
         } else {
@@ -68,12 +79,48 @@ final class LessonStore: ObservableObject {
 
     var remainingSeconds: Int {
         guard let session = currentSession else { return 0 }
-        return max(0, Int(Self.lessonLength - Date().timeIntervalSince(session.startedAt)))
+        return max(0, Int(Self.lessonLength - session.duration))
+    }
+
+    /// Counts only foreground practice time after the learner has made the first response.
+    /// Long suspension/background gaps are discarded rather than added to the lesson.
+    func tickActiveTime(isForeground: Bool) {
+        guard isForeground,
+              let id = activeSessionID,
+              let index = sessions.firstIndex(where: { $0.id == id }),
+              sessions[index].endedAt == nil else {
+            lastTimerUptime = nil
+            return
+        }
+
+        let now = ProcessInfo.processInfo.systemUptime
+        guard sessions[index].messages.contains(where: { $0.role == .user }) else {
+            lastTimerUptime = now
+            return
+        }
+
+        guard let previous = lastTimerUptime else {
+            lastTimerUptime = now
+            return
+        }
+        let delta = min(1.5, max(0, now - previous))
+        lastTimerUptime = now
+        guard delta > 0 else { return }
+
+        let current = sessions[index].activeDurationSeconds ?? sessions[index].duration
+        sessions[index].activeDurationSeconds = min(Self.lessonLength, current + delta)
+        if now - lastDurationPersistUptime >= 5 {
+            persistSessions()
+            lastDurationPersistUptime = now
+        }
     }
 
     var progress: LearningProgress {
-        let completed = sessions.filter { $0.endedAt != nil }
-        let totalMinutes = completed.reduce(0) { $0 + Int($1.duration / 60) }
+        let completed = sessions.filter { session in
+            session.endedAt != nil && session.messages.contains(where: { $0.role == .user })
+        }
+        let totalActiveSeconds = completed.reduce(0.0) { $0 + $1.duration }
+        let totalMinutes = Int(totalActiveSeconds / 60)
         let spokenTurns = sessions.reduce(0) { $0 + $1.messages.filter { $0.role == .user }.count }
         let scores = completed.compactMap { $0.review?.score }
         let focus = completed.flatMap { $0.review?.focusAreas ?? [] }
@@ -94,7 +141,12 @@ final class LessonStore: ObservableObject {
     func append(_ message: ChatMessage) {
         guard let id = activeSessionID,
               let index = sessions.firstIndex(where: { $0.id == id }) else { return }
+        let hadLearnerTurn = sessions[index].messages.contains(where: { $0.role == .user })
         sessions[index].messages.append(message)
+        if message.role == .user && !hadLearnerTurn {
+            sessions[index].activeDurationSeconds = sessions[index].activeDurationSeconds ?? 0
+            lastTimerUptime = ProcessInfo.processInfo.systemUptime
+        }
         if sessions[index].messages.count > 120 {
             sessions[index].messages.removeFirst(sessions[index].messages.count - 120)
         }
@@ -109,6 +161,7 @@ final class LessonStore: ObservableObject {
             persistSessions()
         }
         activeSessionID = nil
+        lastTimerUptime = nil
         return id
     }
 
@@ -148,10 +201,12 @@ final class LessonStore: ObservableObject {
                                     scenarioID: selectedScenarioID, scenarioTitle: selectedScenarioTitle,
                                     personality: selectedPersonality,
                                     flightStageIndex: mode == .fullFlight ? stageIndex : nil,
-                                    review: nil)
+                                    review: nil, activeDurationSeconds: 0)
         sessions.append(session)
         if sessions.count > 60 { sessions.removeFirst(sessions.count - 60) }
         activeSessionID = session.id
+        lastTimerUptime = nil
+        lastDurationPersistUptime = ProcessInfo.processInfo.systemUptime
         persistSessions()
     }
 

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var speech = SpeechManager()
     @StateObject private var tutor = TutorService()
     @StateObject private var lessonStore = LessonStore()
@@ -148,7 +149,10 @@ struct ContentView: View {
             }
             .task {
                 while !Task.isCancelled {
-                    if lessonStore.activeSessionID != nil && lessonStore.remainingSeconds <= 0 {
+                    lessonStore.tickActiveTime(isForeground: scenePhase == .active)
+                    if scenePhase == .active,
+                       lessonStore.activeSessionID != nil,
+                       lessonStore.remainingSeconds <= 0 {
                         await finishLessonAndReview()
                     }
                     try? await Task.sleep(nanoseconds: 1_000_000_000)
@@ -363,12 +367,15 @@ struct ContentView: View {
         speech.stopSpeaking()
         guard let finishedID = lessonStore.finishCurrentSession() else { return }
         isGeneratingReview = true
-        if !model.isEmpty, !apiKey.isEmpty, let session = lessonStore.session(id: finishedID) {
+        if !model.isEmpty, !apiKey.isEmpty,
+           let session = lessonStore.session(id: finishedID),
+           session.messages.contains(where: { $0.role == .user }) {
             do {
                 let selectedReviewModel = reviewModel.isEmpty ? model : reviewModel
                 let review = try await tutor.generateLessonReview(for: session, model: selectedReviewModel,
                                                                   baseURL: apiBase, apiKey: apiKey)
                 lessonStore.saveReview(review, for: finishedID)
+                lessonStore.addVocabulary(review.vocabularyItems ?? [])
             } catch {
                 tutor.errorMessage = "Урок сохранён, но итоговый разбор не получен: \(error.localizedDescription)"
             }
@@ -891,6 +898,17 @@ struct SessionReviewView: View {
                         Section("Коммуникация") { Text(review.communication) }
                         Section("Грамматика") { Text(review.grammar) }
                         Section("Словарный запас") { Text(review.vocabulary) }
+                        if let items = review.vocabularyItems, !items.isEmpty {
+                            Section("Фразы для личного словаря") {
+                                ForEach(items) { item in
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(item.term).fontWeight(.semibold)
+                                        Text(item.translationRU).font(.caption).foregroundStyle(.secondary)
+                                        Text(item.exampleEN).font(.caption)
+                                    }
+                                }
+                            }
+                        }
                         Section("Что получилось") {
                             ForEach(review.strengths, id: \.self) { item in Label(item, systemImage: "checkmark.circle.fill").foregroundStyle(.green) }
                         }

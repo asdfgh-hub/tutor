@@ -133,9 +133,11 @@ final class TutorService: ObservableObject {
           "focus_areas": ["..."],
           "model_answer": "A concise improved English example the learner could have said.",
           "corrections": [{"original":"...","corrected":"...","explanation_ru":"..."}],
-          "drill_phrases": ["...", "..."]
+          "drill_phrases": ["...", "..."],
+          "vocabulary_items": [{"term":"...", "translation_ru":"...", "example_en":"..."}]
         }
         Score from 1 to 10. Do not invent problems when there are none. No pronunciation advice.
+        Include up to 5 genuinely useful cabin-crew words or phrases in vocabulary_items. Do not include basic words.
         Conversation:
         \(transcript)
         """
@@ -153,7 +155,8 @@ final class TutorService: ObservableObject {
             focusAreas: payload.focusAreas ?? [],
             modelAnswer: payload.modelAnswer ?? "",
             corrections: payload.corrections ?? [],
-            drillPhrases: payload.drillPhrases ?? []
+            drillPhrases: payload.drillPhrases ?? [],
+            vocabularyItems: payload.vocabularyItems ?? []
         )
     }
 
@@ -228,32 +231,18 @@ final class TutorService: ObservableObject {
         \(context)
 
         ROLE-PLAY RULES:
-        - Speak only as your assigned in-character role during the spoken part. Never give the learner the answer or complete their sentences.
-        - Keep each spoken turn natural and concise, usually 1-3 sentences. Ask one question or make one request at a time.
-        - Adjust your character's emotions to the scenario. Be realistic, but never abusive, threatening or discriminatory.
-        - Let the learner solve the situation. Do not make the scenario too easy by immediately accepting every answer.
-        - If the learner gives an unclear answer, ask a natural follow-up question instead of explaining what they should say.
+        - Speak ONLY as your assigned in-character role. The learner is practising a live conversation.
+        - Keep each response concise: usually 1-2 natural English sentences, maximum 3.
+        - Ask one question or make one request at a time. Let the learner solve the situation.
+        - If the learner's answer is unclear, ask a natural follow-up question. Do not teach, correct, grade, translate or explain during the conversation.
+        - Never mention grammar mistakes, vocabulary mistakes, scores, corrections or learning feedback in any turn.
         - Never invent airline operating information, gate numbers, delays, seat availability, ingredients, medical advice or official safety procedures. In uncertain situations, allow the learner to say they will check with a colleague or consult official information.
         - Safety-related situations are language practice only. Do not suggest bypassing rules or replacing airline training.
 
-        FEEDBACK AFTER EACH LEARNER TURN:
-        - Do not interrupt the learner. Respond first with the next in-character line.
-        - Then provide brief Russian feedback outside the role-play. Correct at most two important grammar or word-choice mistakes. Do not nitpick harmless phrasing.
-        - Add one useful alternative phrase when relevant, with a short Russian translation.
-        - Suggest up to two useful vocabulary items from the current conversation. Do not add basic words the learner clearly knows.
-        - Give an optional turn score from 1 to 10 based on communication and language only. Do not score pronunciation, accent or voice quality.
-        - In interview mode, the spoken reply must be the recruiter's next question or reaction. The feedback must help the candidate improve the answer.
-
-        Return ONLY valid JSON, with no Markdown code fences and no text outside JSON, using this shape:
-        {
-          "reply": "The next in-character line to be spoken aloud, in English.",
-          "feedback_ru": "Short Russian feedback, or an empty string.",
-          "corrections": [{"original":"learner wording","corrected":"better wording","explanation_ru":"short explanation"}],
-          "useful_phrase": "Useful alternative phrase in English — Russian translation, or empty string.",
-          "vocabulary": [{"term":"English word or phrase","translation_ru":"Russian meaning","example_en":"Short natural example"}],
-          "score": 7
-        }
-        Do not include the Russian feedback, corrections, vocabulary or useful phrase in the spoken reply.
+        OUTPUT:
+        Return ONLY the next in-character response in English as plain text.
+        Do not return JSON, headings, Russian text, corrections, feedback, vocabulary lists or scores.
+        This is a role-play turn, NOT a lesson review. A full grammar and vocabulary review will happen only once, after the learner ends the lesson.
         """
     }
 
@@ -362,12 +351,14 @@ private struct SessionReviewPayload: Decodable {
     let modelAnswer: String?
     let corrections: [CorrectionItem]?
     let drillPhrases: [String]?
+    let vocabularyItems: [VocabularySuggestion]?
 
     enum CodingKeys: String, CodingKey {
         case score, communication, grammar, vocabulary, strengths, corrections
         case focusAreas = "focus_areas"
         case modelAnswer = "model_answer"
         case drillPhrases = "drill_phrases"
+        case vocabularyItems = "vocabulary_items"
     }
 }
 
